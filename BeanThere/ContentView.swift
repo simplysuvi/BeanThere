@@ -1,268 +1,280 @@
+//
+//  ContentView.swift
+//  BeanThere
+//
+
 import SwiftUI
 import MapKit
+import CoreLocation
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
     @StateObject private var mapSearchService = MapSearchService()
-    @State private var selectedShop: CoffeeShop?
-    @State private var manualLocation: CLLocation?
-    @State private var showingLocationSearch = false
-    @State private var position: MapCameraPosition = .userLocation(fallback: .automatic)
-    @State private var hasSetInitialPosition = false
 
-    private var currentLocation: CLLocation? {
-        manualLocation ?? locationManager.location
+    @State private var selectedShopForDetails: CoffeeShop?
+    @State private var showMap: Bool = false
+
+    @State private var position: MapCameraPosition = .userLocation(fallback: .automatic)
+    @State private var hasSearchedOnce = false
+
+    private var userLocation: CLLocation? {
+        locationManager.location
     }
 
     var body: some View {
         NavigationView {
             ZStack {
-                Theme.background.edgesIgnoringSafeArea(.all)
-                
-                VStack(spacing: 0) {
-                    if currentLocation != nil {
-                        headerView
-                        
-                        Map(position: $position) {
-                            if manualLocation == nil {
-                                UserAnnotation {
-                                    ZStack {
-                                        Circle()
-                                            .fill(Color.accentColor.opacity(0.2))
-                                            .frame(width: 44, height: 44)
-                                        Circle()
-                                            .fill(Color.white)
-                                            .frame(width: 22, height: 22)
-                                        Circle()
-                                            .fill(Color.accentColor)
-                                            .frame(width: 16, height: 16)
-                                    }
-                                }
-                            }
-                            
-                            if let manualLocation = manualLocation {
-                                Annotation("Selected Location", coordinate: manualLocation.coordinate) {
-                                    Image(systemName: "mappin.circle.fill")
-                                        .font(.title)
-                                        .foregroundColor(Theme.mapPin)
-                                        .shadow(radius: 5)
-                                }
-                            }
+                Theme.background.ignoresSafeArea()
 
-                            ForEach(mapSearchService.coffeeShops) { shop in
-                                Annotation(shop.name, coordinate: shop.coordinate) {
-                                    CoffeeAnnotationView()
-                                        .scaleEffect(selectedShop == shop ? 1.2 : 1.0)
-                                        .animation(.spring(), value: selectedShop)
-                                        .onTapGesture {
-                                            selectedShop = shop
-                                        }
-                                }
-                            }
+                VStack(spacing: 14) {
+                    header
+
+                    if let userLocation = userLocation {
+                        recommendationCard(userLocation: userLocation)
+
+                        if showMap {
+                            mapView(userLocation: userLocation)
+                                .frame(height: 320)
+                                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                .padding(.horizontal)
+                                .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 5)
+                                .overlay(
+                                    CompassView(locationManager: locationManager, targetShop: mapSearchService.recommendedShop),
+                                    alignment: .topTrailing
+                                )
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .padding()
-                        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
-                        .overlay(
-                            CompassView(locationManager: locationManager, closestShop: mapSearchService.coffeeShops.first)
-                                .padding(),
-                            alignment: .topTrailing
-                        )
-                        
-                        List {
-                            ForEach(mapSearchService.coffeeShops) { shop in
-                                CoffeeRow(shop: shop, userLocation: currentLocation)
-                                    .onTapGesture {
-                                        selectedShop = shop
-                                    }
-                                    .listRowBackground(Color.clear)
-                                    .listRowSeparator(.hidden)
-                                    .transition(.opacity.combined(with: .scale))
-                            }
-                        }
-                        .listStyle(PlainListStyle())
-                        .scrollContentBackground(.hidden)
+
+                        Spacer(minLength: 0)
                     } else {
                         loadingView
+                        Spacer()
                     }
                 }
-                .animation(.spring(), value: mapSearchService.coffeeShops)
-                .animation(.default, value: currentLocation != nil)
-                .navigationBarHidden(true)
-                .onAppear {
-                    locationManager.requestPermission()
-                }
-                .onChange(of: locationManager.location) {
-                    if !hasSetInitialPosition, manualLocation == nil, let newLocation = locationManager.location {
-                        updateMapPosition(to: newLocation)
-                        searchAt(location: newLocation)
-                        hasSetInitialPosition = true
-                    }
-                }
-                .onChange(of: manualLocation) {
-                    if let newLocation = manualLocation {
-                        updateMapPosition(to: newLocation)
-                        searchAt(location: newLocation)
-                    } else if let userLocation = locationManager.location {
-                        // When manual location is cleared, go back to user's live location
+                .padding(.top, 8)
+            }
+            .navigationBarHidden(true)
+            .onAppear {
+                locationManager.requestPermission()
+            }
+            .onChange(of: locationManager.location) {
+                guard let userLocation = locationManager.location else { return }
+
+                if !hasSearchedOnce {
+                    hasSearchedOnce = true
+                    Task {
+                        await mapSearchService.searchNearbyCoffee(userLocation: userLocation)
+                        mapSearchService.updateRecommendation(
+                            userLocation: userLocation,
+                            heading: locationManager.heading,
+                            movement: locationManager.movementState
+                        )
                         updateMapPosition(to: userLocation)
-                        searchAt(location: userLocation)
                     }
+                } else {
+                    // If location changes later, just recompute recommendation from current ranked list
+                    mapSearchService.updateRecommendation(
+                        userLocation: userLocation,
+                        heading: locationManager.heading,
+                        movement: locationManager.movementState
+                    )
                 }
-                .sheet(item: $selectedShop) { shop in
-                    CoffeeDetailSheet(shop: shop, userLocation: currentLocation)
-                        .presentationDetents([.medium, .large])
-                }
-                .sheet(isPresented: $showingLocationSearch) {
-                    NavigationView {
-                        LocationSearchView(selectedLocation: $manualLocation)
-                    }
-                }
+            }
+            .onChange(of: locationManager.heading) {
+                guard let userLocation = userLocation else { return }
+                mapSearchService.updateRecommendation(
+                    userLocation: userLocation,
+                    heading: locationManager.heading,
+                    movement: locationManager.movementState
+                )
+            }
+            .sheet(item: $selectedShopForDetails) { shop in
+                CoffeeDetailSheet(shop: shop, userLocation: userLocation)
+                    .presentationDetents([.medium, .large])
             }
         }
     }
-    
-    private func updateMapPosition(to location: CLLocation) {
-        withAnimation(.spring()) {
-            position = .region(MKCoordinateRegion(
-                center: location.coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-            ))
-        }
-    }
 
-    private func searchAt(location: CLLocation) {
-        let region = MKCoordinateRegion(
-            center: location.coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.05, longitudeDelta: 0.05)
-        )
-        mapSearchService.search(for: "coffee", in: region, userLocation: location)
-    }
-    
-    private var headerView: some View {
+    // MARK: - UI
+
+    private var header: some View {
         HStack {
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("BeanThere")
                     .font(.system(size: 32, weight: .bold, design: .serif))
                     .foregroundColor(Theme.text)
-                if manualLocation != nil {
-                    Text("Showing results for custom location")
-                        .font(.caption)
-                        .foregroundColor(Theme.secondaryText)
-                }
+
+                Text("One good pick. Right now.")
+                    .font(.caption)
+                    .foregroundColor(Theme.secondaryText)
             }
-            .transition(.opacity)
-            
+
             Spacer()
-            
-            Button(action: {
-                showingLocationSearch = true
-            }) {
-                Image(systemName: "magnifyingglass")
+
+            Button {
+                withAnimation(.spring()) {
+                    showMap.toggle()
+                }
+            } label: {
+                Image(systemName: showMap ? "map.fill" : "map")
                     .font(.title2)
                     .foregroundColor(Theme.accent)
                     .padding(10)
                     .background(Theme.accentLight)
                     .clipShape(Circle())
             }
-            
-            if manualLocation != nil {
-                Button(action: {
-                    withAnimation {
-                        manualLocation = nil
-                    }
-                }) {
-                    Image(systemName: "location.fill")
-                        .font(.title2)
-                        .foregroundColor(Theme.accent)
-                        .padding(10)
-                        .background(Theme.accentLight)
-                        .clipShape(Circle())
+        }
+        .padding(.horizontal)
+    }
+
+    private func recommendationCard(userLocation: CLLocation) -> some View {
+        let shop = mapSearchService.recommendedShop
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "cup.and.saucer.fill")
+                    .font(.title2)
+                    .foregroundColor(Theme.accent)
+                    .frame(width: 44, height: 44)
+                    .background(Theme.accentLight)
+                    .cornerRadius(12)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(shop?.name ?? "Finding a good option…")
+                        .font(.headline)
+                        .foregroundColor(Theme.text)
+                        .lineLimit(1)
+
+                    Text(subtitleText(shop: shop, userLocation: userLocation))
+                        .font(.subheadline)
+                        .foregroundColor(Theme.secondaryText)
+                        .lineLimit(1)
                 }
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    if let shop = shop {
+                        shop.mapItem.openInMaps()
+                    }
+                } label: {
+                    Text("Go")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Theme.accent)
+                        .foregroundColor(Theme.background)
+                        .cornerRadius(12)
+                }
+                .disabled(shop == nil)
+
+                Button {
+                    mapSearchService.pickNextRecommendation()
+                } label: {
+                    Text("Not this")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Theme.accentLight)
+                        .foregroundColor(Theme.accent)
+                        .cornerRadius(12)
+                }
+                .disabled(shop == nil)
+
+                Button {
+                    if let shop = shop {
+                        selectedShopForDetails = shop
+                    }
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.title3)
+                        .foregroundColor(Theme.accent)
+                        .frame(width: 44, height: 44)
+                        .background(Theme.accentLight)
+                        .cornerRadius(12)
+                }
+                .disabled(shop == nil)
+            }
+
+            if shop == nil {
+                Text("Tip: if you don’t see anything, try again in a minute or move a bit.")
+                    .font(.caption)
+                    .foregroundColor(Theme.secondaryText)
             }
         }
         .padding()
+        .background(Theme.cardBackground)
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 6)
+        .padding(.horizontal)
     }
-    
+
+    private func subtitleText(shop: CoffeeShop?, userLocation: CLLocation) -> String {
+        guard let shop = shop else {
+            return "Searching nearby…"
+        }
+        let meters = shop.distanceMeters ?? userLocation.distance(from: CLLocation(latitude: shop.coordinate.latitude, longitude: shop.coordinate.longitude))
+        let miles = meters * 0.000621371
+
+        // Simple time estimate (walking-ish) for readability
+        let etaMinutes = Int(round((meters / 1.4) / 60.0))
+        return String(format: "%.2f mi • ~%d min", miles, max(1, etaMinutes))
+    }
+
+    private func mapView(userLocation: CLLocation) -> some View {
+        Map(position: $position) {
+            UserAnnotation()
+
+            if let shop = mapSearchService.recommendedShop {
+                Annotation(shop.name, coordinate: shop.coordinate) {
+                    CoffeeAnnotationView()
+                        .scaleEffect(1.15)
+                }
+            }
+
+            // Show a few alternates lightly (optional)
+            ForEach(mapSearchService.rankedShops.prefix(6)) { shop in
+                if shop.id != mapSearchService.recommendedShop?.id {
+                    Annotation(shop.name, coordinate: shop.coordinate) {
+                        CoffeeAnnotationView()
+                            .opacity(0.55)
+                            .scaleEffect(0.9)
+                    }
+                }
+            }
+        }
+        .onAppear {
+            updateMapPosition(to: userLocation)
+        }
+    }
+
+    private func updateMapPosition(to location: CLLocation) {
+        withAnimation(.spring()) {
+            position = .region(MKCoordinateRegion(
+                center: location.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.03, longitudeDelta: 0.03)
+            ))
+        }
+    }
+
     private var loadingView: some View {
-        VStack {
+        VStack(spacing: 10) {
             if locationManager.authorizationStatus == .denied {
-                Text("Please enable location services in Settings to find the best coffee spots!")
+                Text("Please enable location services in Settings.")
                     .multilineTextAlignment(.center)
                     .padding()
                     .foregroundColor(Theme.secondaryText)
             } else {
-                ProgressView("Finding your location...")
+                ProgressView("Getting your location…")
                     .tint(Theme.accent)
-            }
-        }
-    }
-}
-
-struct CoffeeRow: View {
-    let shop: CoffeeShop
-    let userLocation: CLLocation?
-
-    private var distance: String {
-        guard let distanceInMeters = shop.distance else { return "N/A" }
-        let distanceInMiles = distanceInMeters * 0.000621371
-        return String(format: "%.2f miles", distanceInMiles)
-    }
-
-    private var address: String {
-        shop.mapItem.placemark.title ?? ""
-    }
-    
-    var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: "cup.and.saucer.fill")
-                .font(.title)
-                .foregroundColor(Theme.accent)
-                .frame(width: 60, height: 60)
-                .background(Theme.accentLight)
-                .cornerRadius(12)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(shop.name)
-                    .font(.headline)
-                    .fontWeight(.bold)
-                    .foregroundColor(Theme.text)
-                
-                Text(address)
-                    .font(.subheadline)
                     .foregroundColor(Theme.secondaryText)
-                    .lineLimit(1)
-
-                Text(distance)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .foregroundColor(Theme.accent)
             }
-            
-            Spacer()
-            
-            if let isOpen = shop.googlePlaceDetails?.opening_hours?.open_now {
-                Text(isOpen ? "OPEN" : "CLOSED")
-                    .font(.caption)
-                    .fontWeight(.bold)
-                    .foregroundColor(isOpen ? .green : .red)
-                    .padding(4)
-                    .background((isOpen ? Color.green : Color.red).opacity(0.1))
-                    .cornerRadius(4)
-            }
-            
-            Image(systemName: "chevron.right")
-                .foregroundColor(Theme.secondaryText)
         }
         .padding()
-        .background(Theme.cardBackground)
-        .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 5)
-        .padding(.horizontal)
-        .padding(.vertical, 4)
     }
 }
+
 
 struct ContentView_Previews: PreviewProvider {
     static var previews: some View {

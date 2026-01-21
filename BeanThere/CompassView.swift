@@ -1,43 +1,48 @@
+//
+//  CompassView.swift
+//  BeanThere
+//
+
 import SwiftUI
 import CoreLocation
 
 struct CompassView: View {
     @ObservedObject var locationManager: LocationManager
-    let closestShop: CoffeeShop?
+    let targetShop: CoffeeShop?
 
     private var bearing: Double {
-        guard let userLocation = locationManager.location, let shopLocation = closestShop else { return 0 }
-        return userLocation.bearing(to: shopLocation.coordinate)
+        guard let userLocation = locationManager.location, let shop = targetShop else { return 0 }
+        return userLocation.bearing(to: shop.coordinate)
     }
 
     private var rotationAngle: Angle {
         guard let heading = locationManager.heading else { return .zero }
-        let magneticHeading = heading.magneticHeading
-        return Angle(degrees: bearing - magneticHeading)
+        return Angle(degrees: bearing - heading.magneticHeading)
     }
 
-    private var distance: Double {
-        guard let userLocation = locationManager.location, let shopLocation = closestShop else { return 0 }
-        return userLocation.distance(from: CLLocation(latitude: shopLocation.coordinate.latitude, longitude: shopLocation.coordinate.longitude))
+    private var distanceMiles: Double {
+        guard let userLocation = locationManager.location, let shop = targetShop else { return 0 }
+        let meters = userLocation.distance(from: CLLocation(latitude: shop.coordinate.latitude, longitude: shop.coordinate.longitude))
+        return meters * 0.000621371
     }
 
     var body: some View {
         Group {
-            if let shop = closestShop, locationManager.location != nil {
+            if let shop = targetShop, locationManager.location != nil {
                 VStack(spacing: 4) {
                     Image("compass")
                         .resizable()
                         .frame(width: 60, height: 60)
                         .rotationEffect(rotationAngle)
                         .animation(.spring(), value: rotationAngle)
-                    
+
                     Text(shop.name)
                         .font(.caption)
                         .fontWeight(.medium)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    
-                    Text(String(format: "%.2f miles", distance * 0.000621371))
+
+                    Text(String(format: "%.2f miles", distanceMiles))
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -51,7 +56,7 @@ struct CompassView: View {
     }
 }
 
-extension CLLocation {
+private extension CLLocation {
     func bearing(to destination: CLLocationCoordinate2D) -> Double {
         let lat1 = self.coordinate.latitude.degreesToRadians
         let lon1 = self.coordinate.longitude.degreesToRadians
@@ -69,7 +74,7 @@ extension CLLocation {
     }
 }
 
-extension Double {
-    var degreesToRadians: Double { return self * .pi / 180 }
-    var radiansToDegrees: Double { return self * 180 / .pi }
+private extension Double {
+    var degreesToRadians: Double { self * .pi / 180 }
+    var radiansToDegrees: Double { self * 180 / .pi }
 }

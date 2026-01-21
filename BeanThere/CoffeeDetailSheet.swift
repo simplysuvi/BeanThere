@@ -1,94 +1,79 @@
+//
+//  CoffeeDetailSheet.swift
+//  BeanThere
+//
+
 import SwiftUI
 import MapKit
+import CoreLocation
 
 struct CoffeeDetailSheet: View {
-    @StateObject private var viewModel: CoffeeDetailViewModel
+    let shop: CoffeeShop
     let userLocation: CLLocation?
 
-    init(shop: CoffeeShop, userLocation: CLLocation?) {
-        _viewModel = StateObject(wrappedValue: CoffeeDetailViewModel(coffeeShop: shop))
-        self.userLocation = userLocation
+    private var distanceText: String {
+        guard
+            let userLocation = userLocation
+        else { return "N/A" }
+
+        let shopLoc = CLLocation(latitude: shop.coordinate.latitude, longitude: shop.coordinate.longitude)
+        let meters = userLocation.distance(from: shopLoc)
+        let miles = meters * 0.000621371
+        return String(format: "%.2f miles", miles)
     }
 
-    private var shop: CoffeeShop {
-        viewModel.coffeeShop
+    private var addressText: String {
+        shop.mapItem.placemark.title ?? "No address available"
     }
 
-    private var distance: String {
-        guard let userLocation = userLocation else { return "N/A" }
-        let shopLocation = CLLocation(latitude: shop.coordinate.latitude, longitude: shop.coordinate.longitude)
-        let distanceInMeters = userLocation.distance(from: shopLocation)
-        let distanceInMiles = distanceInMeters * 0.000621371
-        return String(format: "%.2f miles", distanceInMiles)
+    private var phoneText: String? {
+        shop.mapItem.phoneNumber
     }
 
-    private var address: String {
-        let placemark = shop.mapItem.placemark
-        return placemark.title ?? "No address available"
+    private var urlText: String? {
+        shop.mapItem.url?.absoluteString
     }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
                     Text(shop.name)
-                        .font(.largeTitle)
+                        .font(.title)
                         .fontWeight(.bold)
                         .foregroundColor(Theme.text)
+
                     Spacer()
-                    if let isOpen = shop.googlePlaceDetails?.opening_hours?.open_now {
-                        Text(isOpen ? "OPEN" : "CLOSED")
+
+                    Button {
+                        shop.mapItem.openInMaps()
+                    } label: {
+                        Text("Go")
                             .font(.headline)
-                            .foregroundColor(isOpen ? .green : .red)
-                            .fontWeight(.bold)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Theme.accent)
+                            .foregroundColor(Theme.background)
+                            .cornerRadius(12)
                     }
                 }
 
-                Text("Distance: \(distance)")
-                    .font(.headline)
+                Text("Distance: \(distanceText)")
+                    .font(.subheadline)
                     .foregroundColor(Theme.secondaryText)
 
                 Divider()
 
-                VStack(alignment: .leading, spacing: 12) {
-                    InfoRow(icon: "mappin.and.ellipse", text: shop.googlePlaceDetails?.formatted_address ?? address)
-                    
-                    if let phone = shop.googlePlaceDetails?.international_phone_number {
-                        InfoRow(icon: "phone.fill", text: phone, isLink: "tel:\(phone.filter { $0.isNumber })")
-                    }
-                    
-                    if let urlString = shop.googlePlaceDetails?.website {
-                        InfoRow(icon: "safari.fill", text: urlString, isLink: urlString)
-                    }
+                InfoRow(icon: "mappin.and.ellipse", text: addressText)
+
+                if let phone = phoneText {
+                    let digits = phone.filter { $0.isNumber }
+                    InfoRow(icon: "phone.fill", text: phone, isLink: "tel:\(digits)")
                 }
 
-                if let hours = shop.googlePlaceDetails?.opening_hours?.weekday_text {
-                    Divider()
-                    VStack(alignment: .leading) {
-                        Text("Opening Hours")
-                            .font(.headline)
-                            .foregroundColor(Theme.text)
-                        ForEach(hours, id: \.self) { hour in
-                            Text(hour)
-                                .font(.caption)
-                                .foregroundColor(Theme.secondaryText)
-                        }
-                    }
+                if let url = urlText {
+                    InfoRow(icon: "safari.fill", text: url, isLink: url)
                 }
-                
-                Spacer()
-                
-                Button(action: {
-                    shop.mapItem.openInMaps()
-                }) {
-                    Text("Open in Apple Maps")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                }
-                .padding()
-                .background(Theme.accent)
-                .foregroundColor(Theme.background)
-                .cornerRadius(12)
             }
             .padding()
         }
@@ -102,9 +87,11 @@ struct InfoRow: View {
     var isLink: String? = nil
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
                 .foregroundColor(Theme.accent)
+                .frame(width: 20)
+
             if let link = isLink, let url = URL(string: link) {
                 Link(text, destination: url)
                     .font(.body)
